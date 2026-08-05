@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         RGG Land — чат (v25)
+// @name         RGG Land — чат + листочек + стена кнопкой (v25)
 // @namespace    rgg.land.chat.sync
 // @version      25.0
-// @description  v25: игра стримера через DecAPI (без куки/токенов) + fallback GQL; всё из v22-v24
+// @description  v25: встроенный чат по листочку, стена окном, бейдж игры 16px (DecAPI+GQL), × в шапке, WALL прячет 1-й экран, листочек = тумблер
 // @match        https://rgg.land/live
 // @match        https://www.rgg.land/live
 // @run-at       document-start
@@ -26,7 +26,6 @@
   const MIN_W = 220, MIN_H = 200;
   const SIZES = { s: [240, 330], m: [300, 480], l: [400, 680] };
 
-  /* ===== самоочистка предыдущего инстанса ===== */
   const timers = [];
   function regInterval(fn, ms) { const id = setInterval(fn, ms); timers.push(id); return id; }
   function regTimeout(fn, ms) { const id = setTimeout(fn, ms); timers.push(id); return id; }
@@ -49,6 +48,7 @@
   let embeddedActive = false, booted = false, attempts = 0;
   let gameCache = {};
   let refs = {};
+  let closedByUser = false, nativeHiddenRef = null, wallOpen = false, leafBtn = null;
   let lastGeom = { x: 0, y: 0, w: 300, h: 480 };
 
   if (MODE === 'wall') {
@@ -163,9 +163,7 @@
     refs.lifeline.style.display = want ? 'flex' : 'none';
   }
 
-  /* ================= название игры =================
-     1) DecAPI — публичный relay для оверлеев, не нужны куки/токены.
-     2) fallback: Twitch GQL с web client-id (ленси-парсинг).          */
+  /* ================= игра (ТОЛЬКО здесь 16px) ================= */
   function setGameText(txt, full) {
     if (!refs.game) return;
     const txtEl = refs.game.querySelector('.game-txt');
@@ -179,7 +177,6 @@
     else if (game) setGameText(game, game + (via ? ' · ' + via : ''));
     else setGameText('—', 'Игра недоступна (оба источника не ответили)');
   }
-
   function gmGet(url, onOk, onFail) {
     if (typeof GM_xmlhttpRequest === 'function') {
       try {
@@ -189,7 +186,7 @@
           onerror: () => onFail()
         });
         return;
-      } catch (e) { /* fallthrough to fetch */ }
+      } catch (e) {}
     }
     if (typeof fetch === 'function') {
       fetch(url).then(r => (r.ok ? r.text() : Promise.reject())).then(onOk).catch(onFail);
@@ -205,14 +202,11 @@
       });
     } catch (e) { onFail(); }
   }
-
   function fetchGame(login) {
     if (!login) return;
     const c = gameCache[login];
     if (c && Date.now() - c.ts < 90 * 1000) { if (current === login) applyGame(c.game, c.via); return; }
     const done = (game, via) => { gameCache[login] = { game: game, ts: Date.now(), via: via }; if (current === login) applyGame(game, via); };
-
-    // --- 1) DecAPI ---
     gmGet('https://decapi.me/twitch/game/' + encodeURIComponent(login), (text) => {
       const t = (text || '').trim();
       if (!t) return fetchGameFallback(login, done);
@@ -221,8 +215,6 @@
       done(t, 'decapi');
     }, () => fetchGameFallback(login, done));
   }
-
-  // --- 2) fallback GQL (ленси-парсинг независимо от статуса) ---
   function fetchGameFallback(login, done) {
     const q = 'query($l:String!){user(login:$l){stream{game{displayName name}}}}';
     const parse = (j) => {
@@ -233,14 +225,12 @@
     gmPost('https://gql.twitch.tv/gql',
       { 'Client-ID': TWITCH_WEB_CLIENT_ID, 'Content-Type': 'application/json' },
       JSON.stringify({ query: q, variables: { l: login } }),
-      (j) => {
-        const g = parse(j);
-        if (g === null) done(null, null); else done(g, 'gql');
-      },
+      (j) => { const g = parse(j); if (g === null) done(null, null); else done(g, 'gql'); },
       () => done(null, null)
     );
   }
 
+  /* ================= стена / первый экран ================= */
   function updateWallTitle() {
     if (!refs.wallBtn) return;
     const br = detectBrowser();
@@ -274,6 +264,8 @@
     let w = null;
     try { w = window.open(url, 'rgg_chat_wall', features); } catch (e) { w = null; }
     if (!w) { flashWallBtn(); return; }
+    wallOpen = true;
+    hideFirstMonitorChat();
     try { w.blur(); window.focus(); } catch (e) {}
   }
 
@@ -326,6 +318,26 @@
     return null;
   }
 
+  function hideFirstMonitorChat() {
+    const col = findNativeChatPanel();
+    if (col) { nativeHiddenRef = col.el; col.el.style.display = 'none'; }
+    closedByUser = true;
+    if (embeddedActive) exitEmbedded();
+    else { hidden = true; if (refs.panel) refs.panel.style.display = 'none'; applyReturnVisibility(); }
+    saveState();
+  }
+
+  function findLeafButton() {
+    if (leafBtn && leafBtn.isConnected) return leafBtn;
+    leafBtn = null;
+    const all = document.querySelectorAll('button, [role="button"], a');
+    for (const el of all) {
+      const t = ((el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('title') || '') + ' ' + (el.textContent || '')).toLowerCase();
+      if (/\bchat\b|чат/.test(t) && el.offsetParent !== null) { leafBtn = el; break; }
+    }
+    return leafBtn;
+  }
+
   function enterEmbedded(width, nativeEl, ch) {
     refs.nativeEl = nativeEl;
     applyNativeOpacity(nativeEl, true);
@@ -338,6 +350,8 @@
     p.style.display = 'flex';
     void p.offsetHeight;
     embeddedActive = true;
+    closedByUser = false; nativeHiddenRef = null;
+    if (wallOpen) { try { window.close(); } catch (e) {} wallOpen = false; }
     applyReturnVisibility();
     setChat(ch);
   }
@@ -360,9 +374,7 @@
     refs.link.classList.toggle('ok', alive);
     refs.link.classList.toggle('bad', !alive);
     refs.link.textContent = alive ? ('LINK · ' + (current || '—')) : 'NO LINK';
-    refs.link.title = alive
-      ? 'Связь со стрим-окном есть'
-      : 'Нет связи: откройте rgg.land/live в ТОМ ЖЕ Chrome и профиле, где этот ярлык';
+    refs.link.title = alive ? 'Связь со стрим-окном есть' : 'Нет связи: откройте rgg.land/live в ТОМ ЖЕ Chrome и профиле, где этот ярлык';
   }
 
   function buildLifeline() {
@@ -427,7 +439,7 @@
         border:none!important;border-left:1px solid var(--line)!important;
         box-shadow:-14px 0 44px rgba(0,0,0,.55)!important;animation:none!important;margin:0!important}
       #rggchat.rgg-embedded::before{display:none}
-      #rggchat.rgg-embedded .rg,#rggchat.rgg-embedded .rgg-minb,#rggchat.rgg-embedded .rgg-x{display:none}
+      #rggchat.rgg-embedded .rg,#rggchat.rgg-embedded .rgg-minb{display:none}
       #rggchat.rgg-embedded .rgg-top{cursor:default}
       #rggchat.rgg-embedded .rgg-sz{display:none}
       #rggchat:not(.rgg-embedded) .rgg-wall-open{display:none}
@@ -435,15 +447,18 @@
       #rggchat:not(.rgg-wall) .rgg-chips{display:none}
       #rggchat:not(.rgg-wall) .rgg-tools{margin-left:auto}
 
-      .rgg-game{display:flex;align-items:center;gap:6px;min-width:0;flex:0 1 auto;max-width:auto;
+      /* бейдж игры — ЕДИНСТВЕННОЕ место с 16px */
+      .rgg-game{display:flex;align-items:center;gap:6px;min-width:0;flex:0 1 auto;
+        font-family:'Chakra Petch',sans-serif;font-size:16px;font-weight:600;color:var(--muted);
         padding:3px 9px;border:1px solid var(--line);border-radius:6px;background:var(--elev);
         transition:border-color .2s,color .2s}
       .rgg-game:hover{border-color:var(--purple);color:var(--text)}
       .rgg-game .game-ico{flex:0 0 auto;color:var(--purple-hov)}
-      .rgg-game .game-txt{overflow:hidden;text-overflow:ellipsis}
+      .rgg-game .game-txt{white-space:normal;line-height:1.25}
       .rgg-game.bump{animation:rggGameIn .45s ease}
       @keyframes rggGameIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 
+      /* шапка — как была: компактная, ник 16px */
       .rgg-top{display:flex;align-items:center;gap:9px;padding:11px 12px;cursor:grab;user-select:none;
         touch-action:none;background:var(--elev);border-bottom:1px solid var(--line);position:relative;z-index:2}
       .rgg-top:active{cursor:grabbing}
@@ -534,13 +549,14 @@
     if (MODE === 'wall') panel.classList.add('rgg-wall');
     panel.innerHTML = `
       <div class="rgg-top">
-        <span class="rgg-logo"><svg viewBox="0 0 24 24" width="16" height="16" fill="#a970ff"><path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714z"/></svg></span>
+        <span class="rgg-logo"><svg viewBox="0 0 24 24" width="17" height="17" fill="#a970ff"><path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714z"/></svg></span>
         <span class="rgg-name">…</span>
         <span class="rgg-live"><i></i>LIVE</span>
         <span class="rgg-ver">v25${MODE === 'wall' ? '·wall' : ''}</span>
         <span class="rgg-link bad">NO LINK</span>
         <span class="rgg-spacer"></span>
         <button class="rgg-btn rgg-auto is-on" title="${MODE === 'wall' ? 'Синхронизация со стрим-окном' : 'Авто-переключение'}">AUTO</button>
+        <button class="rgg-btn rgg-x" title="Скрыть чат — центральный плеер станет больше">×</button>
       </div>
       <div class="rgg-row2">
         <span class="rgg-game" title="Текущая игра стримера (с Twitch)">
@@ -590,6 +606,7 @@
     };
     if (MODE === 'dock') {
       if (refs.wallBtn) { updateWallTitle(); refs.wallBtn.onclick = openWallWindow; }
+      const xb = panel.querySelector('.rgg-x'); if (xb) xb.onclick = hideFirstMonitorChat;
     }
     const rel = panel.querySelector('.rgg-reload'); if (rel) rel.onclick = () => { const ch = current; if (ch) { current = null; setChat(ch); } };
     if (refs.invBtn) refs.invBtn.onclick = () => {
@@ -744,7 +761,6 @@
 
   function tickBody() {
     if (MODE === 'wall') { refreshChips(); return; }
-
     const col = findNativeChatPanel();
     if (col) {
       const ch = autoOn ? ((detectActive(players()) || {}).ch || current) : current;
@@ -753,7 +769,6 @@
     } else if (embeddedActive) {
       exitEmbedded();
     }
-
     const list = players();
     refreshChips();
     const act = detectActive(list);
@@ -808,6 +823,22 @@
     if (e.key === HEART_KEY && e.newValue) { lastHb = parseInt(e.newValue, 10) || Date.now(); updateLink(); }
   }
 
+  document.addEventListener('pointerdown', (e) => {
+    const leaf = findLeafButton();
+    if (leaf && (e.target === leaf || leaf.contains(e.target))) {
+      if (closedByUser) {
+        if (nativeHiddenRef && nativeHiddenRef.isConnected) nativeHiddenRef.style.display = '';
+        closedByUser = false;
+      } else if (embeddedActive) {
+        e.preventDefault(); e.stopImmediatePropagation();
+        hideFirstMonitorChat();
+      }
+      return;
+    }
+    if (closedByUser && nativeHiddenRef && nativeHiddenRef.isConnected && nativeHiddenRef.style.display === 'none') nativeHiddenRef.style.display = '';
+  }, true);
+  document.addEventListener('keydown', keyHandler);
+
   window[INSTANCE_KEY] = { cleanup: cleanupInstance };
   regInterval(tickGuarded, 350);
   regInterval(() => { if (current) fetchGame(current); }, 60 * 1000);
@@ -816,7 +847,6 @@
     window.addEventListener('storage', storageHandler);
   }
   regInterval(watchdog, 2000);
-  document.addEventListener('keydown', keyHandler);
 
   if (document.body) buildDom();
   else if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', buildDom, { once: true });
