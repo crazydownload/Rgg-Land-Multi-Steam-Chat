@@ -2,7 +2,7 @@
 // @name         RGG Land — чат + листочек + стена кнопкой (v25)
 // @namespace    rgg.land.chat.sync
 // @version      25.0
-// @description  v25: встроенный чат по листочку, стена окном, бейдж игры 16px (DecAPI+GQL), × в шапке, WALL прячет 1-й экран, листочек = тумблер
+// @description  v25: встроенный чат по листочку, стена окном, бейдж игры 16px (DecAPI+GQL), WALL прячет 1-й экран, листочек = тумблер, длинный ник переносится на 2 строки
 // @match        https://rgg.land/live
 // @match        https://www.rgg.land/live
 // @run-at       document-start
@@ -458,7 +458,7 @@
       .rgg-game.bump{animation:rggGameIn .45s ease}
       @keyframes rggGameIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 
-      /* шапка — как была: компактная, ник 16px */
+      /* шапка — компактная; ник переносится на 2 строки, если длинный (как бейдж игры) */
       .rgg-top{display:flex;align-items:center;gap:9px;padding:11px 12px;cursor:grab;user-select:none;
         touch-action:none;background:var(--elev);border-bottom:1px solid var(--line);position:relative;z-index:2}
       .rgg-top:active{cursor:grabbing}
@@ -466,7 +466,8 @@
         background:linear-gradient(90deg,var(--purple-deep),var(--purple) 45%,transparent);opacity:.9}
       .rgg-logo{flex:0 0 auto;display:flex;filter:drop-shadow(0 0 6px rgba(145,71,255,.6))}
       .rgg-name{font-family:'Chakra Petch',sans-serif;font-weight:700;font-size:16px;text-transform:lowercase;
-        letter-spacing:.02em;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        letter-spacing:.02em;color:var(--text);
+        white-space:normal;line-height:1.2;word-break:break-word;overflow-wrap:anywhere}
       .rgg-live{display:inline-flex;align-items:center;gap:5px;font-family:'Chakra Petch',sans-serif;
         font-size:9px;font-weight:700;letter-spacing:.16em;color:#ff5c5c;flex:0 0 auto}
       .rgg-live i{width:7px;height:7px;border-radius:50%;background:var(--red);animation:rggPulse 1.5s infinite}
@@ -556,7 +557,6 @@
         <span class="rgg-link bad">NO LINK</span>
         <span class="rgg-spacer"></span>
         <button class="rgg-btn rgg-auto is-on" title="${MODE === 'wall' ? 'Синхронизация со стрим-окном' : 'Авто-переключение'}">AUTO</button>
-        <button class="rgg-btn rgg-x" title="Скрыть чат — центральный плеер станет больше">×</button>
       </div>
       <div class="rgg-row2">
         <span class="rgg-game" title="Текущая игра стримера (с Twitch)">
@@ -565,9 +565,6 @@
         </span>
         <div class="rgg-chips"></div>
         <div class="rgg-tools">
-          <button class="rgg-btn rgg-sz" data-sz="s" title="Маленький">S</button>
-          <button class="rgg-btn rgg-sz" data-sz="m" title="Средний">M</button>
-          <button class="rgg-btn rgg-sz" data-sz="l" title="Большой">L</button>
           <button class="rgg-btn rgg-wall-open" title="Открыть чат-стену отдельным окном">
             <svg class="wall-ico" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="9" height="13" rx="1.6"/><rect x="13" y="4" width="9" height="9" rx="1.6"/></svg>
           </button>
@@ -606,7 +603,6 @@
     };
     if (MODE === 'dock') {
       if (refs.wallBtn) { updateWallTitle(); refs.wallBtn.onclick = openWallWindow; }
-      const xb = panel.querySelector('.rgg-x'); if (xb) xb.onclick = hideFirstMonitorChat;
     }
     const rel = panel.querySelector('.rgg-reload'); if (rel) rel.onclick = () => { const ch = current; if (ch) { current = null; setChat(ch); } };
     if (refs.invBtn) refs.invBtn.onclick = () => {
@@ -615,23 +611,8 @@
       refs.invBtn.classList.toggle('is-on', invertOn);
       saveState();
     };
-    panel.querySelectorAll('.rgg-sz').forEach(b => b.onclick = () => setSize(b.dataset.sz));
     refs.frame.addEventListener('load', () => refs.loader.classList.add('hide'));
 
-    function setSize(key) {
-      if (MODE === 'wall' || embeddedActive) return;
-      const [w0, h0] = SIZES[key];
-      const w = Math.min(w0, innerWidth - 16), h = Math.min(h0, innerHeight - 16);
-      panel.classList.remove('rgg-min');
-      let l = parseFloat(panel.style.left), t = parseFloat(panel.style.top);
-      if (isNaN(l)) l = 8; if (isNaN(t)) t = 8;
-      l = Math.max(8, Math.min(l, innerWidth - w - 8));
-      t = Math.max(8, Math.min(t, innerHeight - h - 8));
-      panel.style.right = 'auto';
-      panel.style.left = l + 'px'; panel.style.top = t + 'px';
-      panel.style.width = w + 'px'; panel.style.height = h + 'px';
-      markSize(); saveState();
-    }
     function busy(on) { panel.classList.toggle('rgg-busy', on); }
 
     if (MODE === 'dock') {
