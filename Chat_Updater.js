@@ -2,7 +2,7 @@
 // @name         RGG Land Multi Stream Chat
 // @namespace    rgg.land.chat.sync
 // @version      26.5
-// @ date 2026-08-08
+// @date 2026-08-08
 // @description  Удобный чат для сайте rgg.land/live сам переключаеться месту просматриваемыни стримами, выводить название игры взятое либо с твича стримера либо сайта ргг ланд шашки. Есть тёмная/белая темы, режим вывода на 2ой монитор т.к. при втравании плеера на сайте сдвигаются для место под чат и просматриваем стрим становить меньше, чтобы не красть это простанство и нужен режим второго мониторе (включается по номпе)
 // @homepage https://github.com/crazydownload/Rgg-Land-Multi-Steam-Chat
 // @icon https://github.com/crazydownload/Rgg-Land-Multi-Steam-Chat/blob/main/icon_16.png
