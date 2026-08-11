@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RGG Land Multi Stream Chat
 // @namespace    rgg.land.chat.sync
-// @version      26.5
+// @version      26.6
 // @date 2026-08-08
 // @description  Удобный чат для сайте rgg.land/live сам переключаеться месту просматриваемыни стримами, выводить название игры взятое либо с твича стримера либо сайта ргг ланд шашки. Есть тёмная/белая темы, режим вывода на 2ой монитор т.к. при втравании плеера на сайте сдвигаются для место под чат и просматриваем стрим становить меньше, чтобы не красть это простанство и нужен режим второго мониторе (включается по номпе)
 // @homepage https://github.com/crazydownload/Rgg-Land-Multi-Steam-Chat
@@ -11,7 +11,6 @@
 // @downloadURL https://github.com/crazydownload/Rgg-Land-Multi-Steam-Chat/blob/main/Chat_Updater.js
 // @author crazydownload + qwen 3.8 Мах
 // @match        https://rgg.land/live
-
 // @match        https://www.rgg.land/live
 // @run-at       document-start
 // @grant        GM_xmlhttpRequest
@@ -28,7 +27,8 @@
   const ACTIVE_KEY = 'rgg_active_v11';
   const HEART_KEY = 'rgg_hb_v12';
   const WALL_GEOM_KEY = 'rgg_wall_geom_v18';
-  const WALL_OPEN_KEY = 'rgg_wall_open_v26';
+  const WALL_HB_KEY = 'rgg_wall_hb_v26';
+  const WALL_HB_FRESH_MS = 3000;
   const INSTANCE_KEY = '__rggChat_v26';
   const TWITCH_WEB_CLIENT_ID = 'kimne78kx3ncx6brgo4uo6tgcw2s9w';
   const MODE = /chatwall/i.test(location.hash + location.search) ? 'wall' : 'dock';
@@ -60,12 +60,15 @@
   let closedByUser = false, nativeHiddenRef = null, wallOpen = false, leafBtn = null;
   let lastGeom = { x: 0, y: 0, w: 300, h: 480 };
 
-  function isWallOpenElsewhere() {
-    try { return localStorage.getItem(WALL_OPEN_KEY) === '1'; } catch (e) { return false; }
+  // Стена «жива», если её heartbeat свежий (обновляется wall раз в 1с). Надёжно при любом способе закрытия.
+  function isWallAlive() {
+    if (MODE === 'wall') return true;
+    try {
+      const ts = parseInt(localStorage.getItem(WALL_HB_KEY) || '0', 10);
+      return ts > 0 && (Date.now() - ts) < WALL_HB_FRESH_MS;
+    } catch (e) { return false; }
   }
 
-  // Чистое скрытие родного чата сайта, пока открыта стена (без войны на тике -> без мерцания).
-  // Селектор найден по реальному DOM rgg.land: MUI Paper-контейнер, внутри которого twitch chat iframe.
   function ensureWallHideStyle() {
     if (document.getElementById('rgg-wall-hide')) return;
     const st = document.createElement('style');
@@ -76,8 +79,10 @@
     (document.head || document.documentElement).appendChild(st);
   }
   function syncWallActiveClass() {
-    const on = isWallOpenElsewhere() || MODE === 'wall';
+    const on = isWallAlive();
+    const was = document.documentElement.classList.contains('rgg-wall-active');
     document.documentElement.classList.toggle('rgg-wall-active', on);
+    if (was && !on && MODE === 'dock' && embeddedActive) exitEmbedded();
   }
 
   /* ================= игра: ГИБРИД (данные rgg.land из __next_f + fallback Twitch) ================= */
@@ -267,7 +272,6 @@
     } catch (e) {}
   }
 
-  // Стиль скрытия родного чата инжектим как можно раньше (до того как сайт отрисует чат)
   ensureWallHideStyle();
   syncWallActiveClass();
 
@@ -679,7 +683,7 @@
         <span class="rgg-logo"><svg viewBox="0 0 24 24" width="17" height="17" fill="#a970ff"><path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714z"/></svg></span>
         <span class="rgg-name">…</span>
         <span class="rgg-live"><i></i>LIVE</span>
-        <span class="rgg-ver">v26.5${MODE === 'wall' ? '·wall' : ''}</span>
+        <span class="rgg-ver">v26.6${MODE === 'wall' ? '·wall' : ''}</span>
         <span class="rgg-link bad">NO LINK</span>
         <span class="rgg-spacer"></span>
         <button class="rgg-btn rgg-auto is-on" title="${MODE === 'wall' ? 'Синхронизация со стрим-окном' : 'Авто-переключение'}">AUTO</button>
@@ -811,7 +815,6 @@
       applyReturnVisibility();
     }
     if (MODE === 'wall') {
-      try { localStorage.setItem(WALL_OPEN_KEY, '1'); } catch (e) {}
       refs.panel.style.display = 'flex';
       const c0 = localStorage.getItem(ACTIVE_KEY); if (c0) setChat(c0);
       lastHb = parseInt(localStorage.getItem(HEART_KEY) || '0', 10) || 0;
@@ -819,10 +822,13 @@
       const saveWallGeom = () => {
         try { localStorage.setItem(WALL_GEOM_KEY, JSON.stringify({ x: window.screenX, y: window.screenY, w: window.outerWidth, h: window.outerHeight })); } catch (e) {}
       };
+      const wallHeartbeat = () => { try { localStorage.setItem(WALL_HB_KEY, String(Date.now())); } catch (e) {} };
+      wallHeartbeat();
+      regInterval(wallHeartbeat, 1000);
       saveWallGeom();
       regInterval(saveWallGeom, 1500);
       addEventListener('resize', saveWallGeom);
-      addEventListener('beforeunload', () => { try { localStorage.removeItem(WALL_OPEN_KEY); } catch (e) {} });
+      addEventListener('beforeunload', () => { try { localStorage.removeItem(WALL_HB_KEY); } catch (e) {} });
       addEventListener('beforeunload', saveWallGeom);
     }
   }
@@ -870,9 +876,8 @@
 
   function tickBody() {
     if (MODE === 'wall') { refreshChips(); return; }
-    // Dock уважает открытую стену: не встраивается в родной чат. Сам чат прячется чисто через CSS
-    // (html.rgg-wall-active + MuiPaper:has(chat iframe) -> visibility/pointer-events), без войны на тике.
-    if (isWallOpenElsewhere()) {
+    // Dock: стена считается открытой только пока её heartbeat свежий (самосброс через 3с после любого закрытия).
+    if (isWallAlive()) {
       if (embeddedActive) exitEmbedded();
       const list = players();
       refreshChips();
@@ -915,7 +920,7 @@
       buildPanel();
       renderAuto();
       booted = true; attempts = 0;
-      console.log('[RGG-chat] v26.5 dom built · mode=' + MODE + ' · browser=' + detectBrowser());
+      console.log('[RGG-chat] v26.6 dom built · mode=' + MODE + ' · browser=' + detectBrowser());
     } catch (e) {
       console.error('[RGG-chat] buildDom error', e);
     }
@@ -942,10 +947,7 @@
   function storageHandler(e) {
     if (e.key === ACTIVE_KEY && wallAuto && e.newValue) setChat(e.newValue);
     if (e.key === HEART_KEY && e.newValue) { lastHb = parseInt(e.newValue, 10) || Date.now(); updateLink(); }
-    if (e.key === WALL_OPEN_KEY) {
-      syncWallActiveClass();
-      if (MODE === 'dock' && e.newValue === '1' && embeddedActive) exitEmbedded();
-    }
+    if (e.key === WALL_HB_KEY) syncWallActiveClass();
   }
 
   document.addEventListener('pointerdown', (e) => {
@@ -968,7 +970,7 @@
   regInterval(tickGuarded, 350);
   regInterval(updateGameBadge, 60 * 1000);
   regInterval(updateLinkGuarded, 1000);
-  regInterval(syncWallActiveClass, 1000);
+  regInterval(syncWallActiveClass, 500);
   window.addEventListener('storage', storageHandler);
   regInterval(watchdog, 2000);
 
@@ -976,5 +978,5 @@
   else if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', buildDom, { once: true });
   else buildDom();
 
-  console.log('[RGG-chat] v26.5 started · mode=' + MODE + ' · browser=' + detectBrowser());
+  console.log('[RGG-chat] v26.6 started · mode=' + MODE + ' · browser=' + detectBrowser());
 })();
