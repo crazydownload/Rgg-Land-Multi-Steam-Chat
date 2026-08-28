@@ -1,17 +1,12 @@
 // ==UserScript==
-// @name         RGG Land Multi Stream Chat
-// @namespace    rgg.land.chat.sync
-// @version      26.6
-// @date 2026-08-08
-// @description  Удобный чат для сайте rgg.land/live сам переключаеться месту просматриваемыни стримами, выводить название игры взятое либо с твича стримера либо сайта ргг ланд шашки. Есть тёмная/белая темы, режим вывода на 2ой монитор т.к. при втравании плеера на сайте сдвигаются для место под чат и просматриваем стрим становить меньше, чтобы не красть это простанство и нужен режим второго мониторе (включается по номпе)
-// @homepage https://github.com/crazydownload/Rgg-Land-Multi-Steam-Chat
-// @icon https://github.com/crazydownload/Rgg-Land-Multi-Steam-Chat/blob/main/icon_16.png
-// @icon64 https://github.com/crazydownload/Rgg-Land-Multi-Steam-Chat/blob/main/icon_64.png
-// @updateURL https://github.com/crazydownload/Rgg-Land-Multi-Steam-Chat/blob/main/Chat_Updater.js
-// @downloadURL https://github.com/crazydownload/Rgg-Land-Multi-Steam-Chat/blob/main/Chat_Updater.js
-// @author crazydownload + qwen 3.8 Мах
+// @name         RGG Land / Twitch Universal Chat (v27.2 Fixed Table Parser)
+// @namespace    rgg.chat.sync
+// @version      27.2
+// @description  v27.2: Исправлен парсер таблицы rgg.land/games (теперь берет строго 5-ю колонку). Устранен баг с отображением цифр вместо игры.
 // @match        https://rgg.land/live
 // @match        https://www.rgg.land/live
+// @match        *://www.twitch.tv/*
+// @match        *://twitch.tv/*
 // @run-at       document-start
 // @grant        GM_xmlhttpRequest
 // @connect      rgg.land
@@ -23,29 +18,35 @@
   'use strict';
 
   const HOST = location.hostname;
+  const IS_RGG = /rgg\.land$/i.test(HOST);
+  const IS_TWITCH = /twitch\.tv$/i.test(HOST);
+
   const SAVE_KEY = 'rgg_chat_win_v11';
   const ACTIVE_KEY = 'rgg_active_v11';
   const HEART_KEY = 'rgg_hb_v12';
   const WALL_GEOM_KEY = 'rgg_wall_geom_v18';
   const WALL_HB_KEY = 'rgg_wall_hb_v26';
   const WALL_HB_FRESH_MS = 3000;
-  const INSTANCE_KEY = '__rggChat_v26';
+  const INSTANCE_KEY = '__rggChat_v27';
   const TWITCH_WEB_CLIENT_ID = 'kimne78kx3ncx6brgo4uo6tgcw2s9w';
   const MODE = /chatwall/i.test(location.hash + location.search) ? 'wall' : 'dock';
   const MIN_W = 220, MIN_H = 200;
   const PLAQUE_SHIFT = 110;
 
+  const NATIVE_CHAT_SEL = IS_TWITCH
+    ? 'section[data-test-selector="chat-room-component-layout"]'
+    : 'div.MuiPaper-root:has(iframe[src*="twitch.tv/embed"][src*="/chat"])';
+
   const timers = [];
   function regInterval(fn, ms) { const id = setInterval(fn, ms); timers.push(id); return id; }
   function regTimeout(fn, ms) { const id = setTimeout(fn, ms); timers.push(id); return id; }
+
   function cleanupInstance() {
     timers.forEach(id => { clearInterval(id); clearTimeout(id); });
     timers.length = 0;
     try { document.removeEventListener('keydown', keyHandler); } catch (e) {}
     try { window.removeEventListener('storage', storageHandler); } catch (e) {}
     try { const p = document.getElementById('rggchat'); if (p) p.remove(); } catch (e) {}
-    try { const d = document.getElementById('rggdock'); if (d) d.remove(); } catch (e) {}
-    try { const l = document.getElementById('rgglifeline'); if (l) l.remove(); } catch (e) {}
     try { document.querySelectorAll('style[data-rgg], link[data-rgg]').forEach(n => n.remove()); } catch (e) {}
     try { document.documentElement.classList.remove('rgg-wall-active'); } catch (e) {}
   }
@@ -60,7 +61,6 @@
   let closedByUser = false, nativeHiddenRef = null, wallOpen = false, leafBtn = null;
   let lastGeom = { x: 0, y: 0, w: 300, h: 480 };
 
-  // Стена «жива», если её heartbeat свежий (обновляется wall раз в 1с). Надёжно при любом способе закрытия.
   function isWallAlive() {
     if (MODE === 'wall') return true;
     try {
@@ -74,10 +74,11 @@
     const st = document.createElement('style');
     st.id = 'rgg-wall-hide'; st.setAttribute('data-rgg', '1');
     st.textContent =
-      'html.rgg-wall-active div.MuiPaper-root:has(iframe[src*="twitch.tv/embed"][src*="/chat"]){' +
+      'html.rgg-wall-active ' + NATIVE_CHAT_SEL + '{' +
       'visibility:hidden!important;pointer-events:none!important;position:absolute!important;left:-9999px!important}';
     (document.head || document.documentElement).appendChild(st);
   }
+
   function syncWallActiveClass() {
     const on = isWallAlive();
     const was = document.documentElement.classList.contains('rgg-wall-active');
@@ -85,7 +86,7 @@
     if (was && !on && MODE === 'dock' && embeddedActive) exitEmbedded();
   }
 
-  /* ================= игра: ГИБРИД (данные rgg.land из __next_f + fallback Twitch) ================= */
+  /* ================= ПАРСЕРЫ ИГР ================= */
   const RU_MONTHS = { 'января':1,'февраля':2,'марта':3,'апреля':4,'мая':5,'июня':6,'июля':7,'августа':8,'сентября':9,'октября':10,'ноября':11,'декабря':12 };
   let eventCache = { ts: 0, map: {}, label: '—', ok: false };
   let twitchCache = {};
@@ -105,6 +106,7 @@
       fetch(url, { credentials: 'include' }).then(r => (r.ok ? r.text() : Promise.reject())).then(onOk).catch(onFail);
     } else onFail();
   }
+
   function gmPostJSON(url, headers, data, onOk, onFail) {
     if (typeof GM_xmlhttpRequest === 'function') {
       try {
@@ -133,6 +135,7 @@
     if (isNaN(d1) || isNaN(d2)) return null;
     return [d1, d2];
   }
+
   function todayInRange(range) {
     if (!range) return false;
     const t = new Date(); t.setHours(0, 0, 0, 0);
@@ -171,55 +174,121 @@
     return map;
   }
 
+  // --- ИСПРАВЛЕННЫЙ ПАРСЕР ДЛЯ RGG LAND GAMES (/games) ---
+  // Структура таблицы: [0: Место] [1: Участник] [2: Расстояние] [3: Баланс] [4: Текущая игра]
+  function parseRggLandGames(html) {
+    const map = {};
+    try {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+
+      // Ищем все строки тела таблицы
+      const rows = doc.querySelectorAll('table tbody tr.MuiTableRow-root');
+
+      rows.forEach(row => {
+        const cells = row.querySelectorAll('td.MuiTableCell-body');
+
+        // Нам нужно минимум 5 ячеек, чтобы добраться до игры
+        if (cells.length >= 5) {
+          // Ячейка 1 (индекс 1) - Участник (ссылка на твич)
+          const nickLink = cells[1].querySelector('a[href*="twitch.tv/"]');
+          // Ячейка 4 (индекс 4) - Текущая игра
+          const gameCell = cells[4];
+
+          if (nickLink && gameCell) {
+            const href = nickLink.getAttribute('href');
+            let login = '';
+            if (href) {
+              const match = href.match(/twitch\.tv\/([^\/\?]+)/);
+              if (match) login = match[1].toLowerCase();
+            }
+            if (!login) login = nickLink.textContent.trim().toLowerCase();
+
+            // Берем текст из span внутри ячейки игры или просто текст ячейки
+            const gameSpan = gameCell.querySelector('span');
+            let gameText = gameSpan ? gameSpan.textContent.trim() : gameCell.textContent.trim();
+
+            // Фильтруем "Игра отсутствует" и пустые значения
+            if (login && gameText && gameText !== '—' && gameText !== '-' && !gameText.includes('Игра отсутствует')) {
+              map[login] = { game: gameText, online: true };
+            }
+          }
+        }
+      });
+    } catch (e) {
+      console.error('[RGG-chat] Parse RGG Land Games error:', e);
+    }
+    return map;
+  }
+
   function refreshEvent(done) {
+    if (!IS_RGG) { done({}, '—', false); return; }
     if (eventCache.ts && Date.now() - eventCache.ts < 60 * 1000) { done(eventCache.map, eventCache.label, eventCache.ok); return; }
+
     const base = 'https://' + HOST.replace(/^www\./, '');
+
     gmGetText(base + '/checkers/', (htmlC) => {
       const seasons = parseCheckersSeasons(htmlC);
       const active = seasons.find(s => todayInRange(s.range));
+
       if (active) {
         gmGetText(base + '/checkers/season/' + active.slug, (htmlP) => {
           const map = parsePlayersFromPayload(htmlP);
           const ok = Object.keys(map).length > 0;
           eventCache = { ts: Date.now(), map: map, label: active.name, ok: ok };
-          console.log('[RGG-chat] эвент:', active.name, '| игроков с rgg.land:', Object.keys(map).length);
+          console.log('[RGG-chat] эвент:', active.name, '| игроков:', Object.keys(map).length);
           done(map, active.name, ok);
         }, () => { eventCache = { ts: Date.now(), map: {}, label: active.name, ok: false }; done({}, active.name, false); });
         return;
       }
+
       gmGetText(base + '/games', (htmlG) => {
-        const dm = htmlG.match(/(\d{1,2})\s+([а-яё]+)\s+по\s+(\d{1,2})\s+([а-яё]+)\s+(\d{4})/i);
-        let range = null;
-        if (dm && RU_MONTHS[dm[2].toLowerCase()] && RU_MONTHS[dm[4].toLowerCase()]) {
-          range = [new Date(+dm[5], RU_MONTHS[dm[2].toLowerCase()] - 1, +dm[1]),
-                   new Date(+dm[5], RU_MONTHS[dm[4].toLowerCase()] - 1, +dm[3])];
-        }
-        if (todayInRange(range)) {
-          const map = parsePlayersFromPayload(htmlG);
-          const ok = Object.keys(map).length > 0;
-          eventCache = { ts: Date.now(), map: map, label: 'RGG Land', ok: ok };
-          console.log('[RGG-chat] эвент: RGG Land | игроков с rgg.land:', Object.keys(map).length);
-          done(map, 'RGG Land', ok);
+        const map = parseRggLandGames(htmlG);
+        const ok = Object.keys(map).length > 0;
+
+        if (ok) {
+           eventCache = { ts: Date.now(), map: map, label: 'RGG Land', ok: ok };
+           console.log('[RGG-chat] эвент: RGG Land | игроков:', Object.keys(map).length);
+           done(map, 'RGG Land', ok);
         } else {
-          eventCache = { ts: Date.now(), map: {}, label: 'межэвентье', ok: false };
-          done({}, 'межэвентье', false);
+           eventCache = { ts: Date.now(), map: {}, label: 'межэвентье', ok: false };
+           done({}, 'межэвентье', false);
         }
       }, () => { eventCache = { ts: Date.now(), map: {}, label: '—', ok: false }; done({}, '—', false); });
+
     }, () => { eventCache = { ts: Date.now(), map: {}, label: '—', ok: false }; done({}, '—', false); });
   }
 
   function fetchTwitchGame(login, done) {
     const c = twitchCache[login];
     if (c && Date.now() - c.ts < 90 * 1000) { done(c.game); return; }
-    const finish = (game) => { twitchCache[login] = { game: game, ts: Date.now() }; done(game); };
-    gmGetText('https://decapi.me/twitch/game/' + encodeURIComponent(login), (text) => {
-      const t = (text || '').trim();
-      if (!t) return fetchTwitchGql(login, finish);
-      if (/offline/i.test(t)) return finish('OFFLINE');
-      if (/error|not found|unknown|unexpected/i.test(t)) return fetchTwitchGql(login, finish);
-      finish(t);
-    }, () => fetchTwitchGql(login, finish));
+
+    const finish = (game) => {
+      // ВАЛИДАЦИЯ: Если API вернуло просто число (например, кол-во зрителей 677), игнорируем
+      if (game && /^\d+$/.test(String(game).trim())) {
+        console.warn('[RGG-chat] API вернуло число вместо игры:', game);
+        game = null;
+      }
+      twitchCache[login] = { game: game, ts: Date.now() };
+      done(game);
+    };
+
+    fetchTwitchGql(login, (gqlGame) => {
+      if (gqlGame && gqlGame !== 'OFFLINE') {
+        finish(gqlGame);
+      } else {
+        gmGetText('https://decapi.me/twitch/game/' + encodeURIComponent(login), (text) => {
+          const t = (text || '').trim();
+          if (!t || /offline/i.test(t) || /error/i.test(t)) {
+            finish(gqlGame || 'OFFLINE');
+          } else {
+            finish(t);
+          }
+        }, () => finish(gqlGame || null));
+      }
+    });
   }
+
   function fetchTwitchGql(login, done) {
     const q = 'query($l:String!){user(login:$l){stream{game{displayName name}}}}';
     gmPostJSON('https://gql.twitch.tv/gql',
@@ -242,6 +311,7 @@
     refs.game.title = full || txt;
     refs.game.classList.remove('bump'); void refs.game.offsetWidth; refs.game.classList.add('bump');
   }
+
   function applyGame(game, via) {
     if (game === 'OFFLINE') setGameText('OFFLINE', 'Стример не в сети' + (via ? ' · ' + via : ''));
     else if (game) setGameText(game, game + (via ? ' · ' + via : ''));
@@ -251,6 +321,12 @@
   function updateGameBadge() {
     if (!current) { applyGame(null, '—'); return; }
     const myNick = String(current).toLowerCase();
+
+    if (IS_TWITCH) {
+      fetchTwitchGame(myNick, (g) => { if (myNick === String(current).toLowerCase()) applyGame(g, 'twitch'); });
+      return;
+    }
+
     refreshEvent((map, label, ok) => {
       if (myNick !== String(current).toLowerCase()) return;
       const entry = map[myNick];
@@ -375,7 +451,7 @@
   function flashWallBtn() {
     if (!refs.wallBtn) return;
     refs.wallBtn.classList.add('blocked');
-    refs.wallBtn.title = '⚠ Разреши всплывающие окна для rgg.land — иначе стену не открыть';
+    refs.wallBtn.title = '⚠ Разреши всплывающие окна для ' + HOST + ' — иначе стену не открыть';
     regTimeout(() => { if (refs.wallBtn) { refs.wallBtn.classList.remove('blocked'); updateWallTitle(); } }, 2600);
   }
   function openWallWindow() {
@@ -418,6 +494,14 @@
   }
 
   function findNativeChatPanel() {
+    try {
+      const sel = document.querySelector(NATIVE_CHAT_SEL);
+      if (sel && !(refs.panel && refs.panel.contains(sel))) {
+        const r = sel.getBoundingClientRect();
+        if (r.width > 60 && r.height > 60) return { el: sel, width: r.width > 200 ? r.width : 340 };
+      }
+    } catch (e) {}
+
     const ifs = document.querySelectorAll('iframe');
     for (const f of ifs) {
       if (refs.panel && refs.panel.contains(f)) continue;
@@ -432,22 +516,6 @@
       }
       const br = best.getBoundingClientRect();
       return { el: best, width: br.width > 200 ? br.width : r.width };
-    }
-    const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    let n, header = null;
-    while ((n = walk.nextNode())) {
-      const v = (n.textContent || '').trim();
-      if (v === 'Чат трансляции') { header = n.parentElement; break; }
-    }
-    if (header && !(refs.panel && refs.panel.contains(header))) {
-      let el = header;
-      for (let i = 0; i < 8 && el && el !== document.body; i++) {
-        const r = el.getBoundingClientRect();
-        if (r.right > innerWidth - 60 && r.height > innerHeight * 0.5 && r.width >= 240 && r.width <= 560) {
-          return { el, width: r.width };
-        }
-        el = el.parentElement;
-      }
     }
     return null;
   }
@@ -508,7 +576,7 @@
     refs.link.classList.toggle('ok', alive);
     refs.link.classList.toggle('bad', !alive);
     refs.link.textContent = alive ? ('LINK · ' + (current || '—')) : 'NO LINK';
-    refs.link.title = alive ? 'Связь со стрим-окном есть' : 'Нет связи: откройте rgg.land/live в ТОМ ЖЕ Chrome и профиле, где этот ярлык';
+    refs.link.title = alive ? 'Связь со стрим-окном есть' : 'Нет связи: откройте ' + HOST + ' в ТОМ ЖЕ браузере и профиле';
   }
 
   function buildLifeline() {
@@ -528,7 +596,7 @@
     const st = document.createElement('style'); st.setAttribute('data-rgg', '1'); st.textContent = css; document.head.appendChild(st);
     const el = document.createElement('button');
     el.id = 'rgglifeline';
-    el.title = 'Открыть чат отдельным окном (Alt+C) · или жми кнопку чата в плеере, чтобы встроить';
+    el.title = 'Открыть чат отдельным окном (Alt+C)';
     el.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
     document.body.appendChild(el);
     refs.lifeline = el;
@@ -683,7 +751,7 @@
         <span class="rgg-logo"><svg viewBox="0 0 24 24" width="17" height="17" fill="#a970ff"><path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714z"/></svg></span>
         <span class="rgg-name">…</span>
         <span class="rgg-live"><i></i>LIVE</span>
-        <span class="rgg-ver">v26.6${MODE === 'wall' ? '·wall' : ''}</span>
+        <span class="rgg-ver">v27.2${MODE === 'wall' ? '·wall' : ''}</span>
         <span class="rgg-link bad">NO LINK</span>
         <span class="rgg-spacer"></span>
         <button class="rgg-btn rgg-auto is-on" title="${MODE === 'wall' ? 'Синхронизация со стрим-окном' : 'Авто-переключение'}">AUTO</button>
@@ -840,7 +908,10 @@
     current = ch;
     if (refs.loader) refs.loader.classList.remove('hide');
     clearTimeout(refs._lt); refs._lt = regTimeout(() => refs.loader && refs.loader.classList.add('hide'), 7000);
-    if (refs.frame) refs.frame.src = 'https://www.twitch.tv/embed/' + ch + '/chat?parent=' + HOST + '&darkpopout&theme=dark';
+
+    const parentHost = IS_TWITCH ? 'www.twitch.tv' : HOST;
+    if (refs.frame) refs.frame.src = 'https://www.twitch.tv/embed/' + ch + '/chat?parent=' + parentHost + '&darkpopout&theme=dark';
+
     if (refs.name) refs.name.textContent = ch;
     if (MODE === 'wall') { wallChips.add(ch); updateLink(); }
     if (MODE === 'dock') { try { localStorage.setItem(ACTIVE_KEY, ch); } catch (e) {} }
@@ -874,9 +945,31 @@
     });
   }
 
+  function twitchChannelFromUrl() {
+    if (!IS_TWITCH) return null;
+    const seg = (location.pathname || '').split('/').filter(Boolean)[0];
+    if (!seg) return null;
+    if (/^(directory|settings|downloads|turbo|prime|jobs|p|popout|embed|videos|collection|moderator|home)$/i.test(seg)) return null;
+    return seg.toLowerCase();
+  }
+
   function tickBody() {
     if (MODE === 'wall') { refreshChips(); return; }
-    // Dock: стена считается открытой только пока её heartbeat свежий (самосброс через 3с после любого закрытия).
+
+    if (IS_TWITCH) {
+      const ch = twitchChannelFromUrl();
+      if (ch) {
+        if (current !== ch) setChat(ch);
+        else updateGameBadge();
+      }
+      if (isWallAlive()) {
+        refreshChips();
+        return;
+      }
+      refreshChips();
+      return;
+    }
+
     if (isWallAlive()) {
       if (embeddedActive) exitEmbedded();
       const list = players();
@@ -920,7 +1013,7 @@
       buildPanel();
       renderAuto();
       booted = true; attempts = 0;
-      console.log('[RGG-chat] v26.6 dom built · mode=' + MODE + ' · browser=' + detectBrowser());
+      console.log('[RGG-chat] v27.2 dom built · mode=' + MODE + ' · host=' + HOST);
     } catch (e) {
       console.error('[RGG-chat] buildDom error', e);
     }
@@ -950,20 +1043,22 @@
     if (e.key === WALL_HB_KEY) syncWallActiveClass();
   }
 
-  document.addEventListener('pointerdown', (e) => {
-    const leaf = findLeafButton();
-    if (leaf && (e.target === leaf || leaf.contains(e.target))) {
-      if (closedByUser) {
-        if (nativeHiddenRef && nativeHiddenRef.isConnected) nativeHiddenRef.style.display = '';
-        closedByUser = false;
-      } else if (embeddedActive) {
-        e.preventDefault(); e.stopImmediatePropagation();
-        hideFirstMonitorChat();
+  if (!IS_TWITCH) {
+    document.addEventListener('pointerdown', (e) => {
+      const leaf = findLeafButton();
+      if (leaf && (e.target === leaf || leaf.contains(e.target))) {
+        if (closedByUser) {
+          if (nativeHiddenRef && nativeHiddenRef.isConnected) nativeHiddenRef.style.display = '';
+          closedByUser = false;
+        } else if (embeddedActive) {
+          e.preventDefault(); e.stopImmediatePropagation();
+          hideFirstMonitorChat();
+        }
+        return;
       }
-      return;
-    }
-    if (closedByUser && nativeHiddenRef && nativeHiddenRef.isConnected && nativeHiddenRef.style.display === 'none') nativeHiddenRef.style.display = '';
-  }, true);
+      if (closedByUser && nativeHiddenRef && nativeHiddenRef.isConnected && nativeHiddenRef.style.display === 'none') nativeHiddenRef.style.display = '';
+    }, true);
+  }
   document.addEventListener('keydown', keyHandler);
 
   window[INSTANCE_KEY] = { cleanup: cleanupInstance };
@@ -978,5 +1073,5 @@
   else if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', buildDom, { once: true });
   else buildDom();
 
-  console.log('[RGG-chat] v26.6 started · mode=' + MODE + ' · browser=' + detectBrowser());
+  console.log('[RGG-chat] v27.2 started · mode=' + MODE + ' · host=' + HOST);
 })();
