@@ -5,8 +5,6 @@
 // @description  v27.6: В режиме стены убран список стримеров, оставлено только название игры.
 // @match        https://rgg.land/live
 // @match        https://www.rgg.land/live
-// @match        *://www.twitch.tv/*
-// @match        *://twitch.tv/*
 // @run-at       document-start
 // @grant        GM_xmlhttpRequest
 // @connect      rgg.land
