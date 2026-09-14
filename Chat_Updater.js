@@ -3,6 +3,9 @@
 // @namespace    rgg.chat.sync
 // @version      27.6
 // @description  v27.6: В режиме стены убран список стримеров, оставлено только название игры.
+// @updateURL https://raw.githubusercontent.com/crazydownload/Rgg-Land-Multi-Steam-Chat/refs/heads/main/Chat_Updater.js
+// @downloadURL https://raw.githubusercontent.com/crazydownload/Rgg-Land-Multi-Steam-Chat/refs/heads/main/Chat_Updater.js
+// @author https://github.com/crazydownload/Rgg-Land-Multi-Steam-Chat
 // @match        https://rgg.land/live
 // @match        https://www.rgg.land/live
 // @run-at       document-start
