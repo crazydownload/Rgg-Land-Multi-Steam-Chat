@@ -1,11 +1,11 @@
 // ==UserScript==
-// @name         RGG Land / Twitch Universal Chat (v27.6 Wall Clean)
+// @name         RGG Land / Multi Stream Chat (v27.8 Switch Lock)
 // @namespace    rgg.chat.sync
-// @version      27.6
-// @description  v27.6: В режиме стены убран список стримеров, оставлено только название игры.
-// @updateURL https://raw.githubusercontent.com/crazydownload/Rgg-Land-Multi-Steam-Chat/refs/heads/main/Chat_Updater.js
-// @downloadURL https://raw.githubusercontent.com/crazydownload/Rgg-Land-Multi-Steam-Chat/refs/heads/main/Chat_Updater.js
-// @author https://github.com/crazydownload/Rgg-Land-Multi-Steam-Chat
+// @version      27.8
+// @description  v27.8: Исправлено мигание/исчезновение чата при быстром переключении между стримерами. Добавлена блокировка перерисовки во время загрузки iframe.
+// @updateURL    https://raw.githubusercontent.com/crazydownload/Rgg-Land-Multi-Steam-Chat/refs/heads/main/Chat_Updater.js
+// @downloadURL  https://raw.githubusercontent.com/crazydownload/Rgg-Land-Multi-Steam-Chat/refs/heads/main/Chat_Updater.js
+// @author       https://github.com/crazydownload/Rgg-Land-Multi-Steam-Chat
 // @match        https://rgg.land/live
 // @match        https://www.rgg.land/live
 // @run-at       document-start
@@ -61,6 +61,9 @@
   let refs = {};
   let closedByUser = false, nativeHiddenRef = null, wallOpen = false, leafBtn = null;
   let lastGeom = { x: 0, y: 0, w: 300, h: 480 };
+
+  // --- НОВОЕ: Блокировка переключения ---
+  let switchingLock = false;
 
   function isWallAlive() {
     if (MODE === 'wall') return true;
@@ -175,7 +178,7 @@
     return map;
   }
 
-  // --- ИСПРАВЛЕННЫЙ ПАРСЕР ДЛЯ RGG LAND GAMES (/games) ---
+  // --- ПАРСЕР ДЛЯ RGG LAND GAMES (/games) ---
   function parseRggLandGames(html) {
     const map = {};
     try {
@@ -426,12 +429,6 @@
     return best;
   }
 
-  function applyReturnVisibility() {
-    if (!refs.lifeline) return;
-    const want = MODE === 'dock' && !embeddedActive && hidden;
-    refs.lifeline.style.display = want ? 'flex' : 'none';
-  }
-
   function updateWallTitle() {
     if (!refs.wallBtn) return;
     const br = detectBrowser();
@@ -508,6 +505,23 @@
       const br = best.getBoundingClientRect();
       return { el: best, width: br.width > 200 ? br.width : r.width };
     }
+
+    const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let n, header = null;
+    while ((n = walk.nextNode())) {
+      const v = (n.textContent || '').trim();
+      if (v === 'Чат трансляции') { header = n.parentElement; break; }
+    }
+    if (header && !(refs.panel && refs.panel.contains(header))) {
+      let el = header;
+      for (let i = 0; i < 8 && el && el !== document.body; i++) {
+        const r = el.getBoundingClientRect();
+        if (r.right > innerWidth - 60 && r.height > innerHeight * 0.5 && r.width >= 240 && r.width <= 560) {
+          return { el, width: r.width };
+        }
+        el = el.parentElement;
+      }
+    }
     return null;
   }
 
@@ -516,7 +530,7 @@
     if (col) { nativeHiddenRef = col.el; col.el.style.display = 'none'; }
     closedByUser = true;
     if (embeddedActive) exitEmbedded();
-    else { hidden = true; if (refs.panel) refs.panel.style.display = 'none'; applyReturnVisibility(); }
+    else { hidden = true; if (refs.panel) refs.panel.style.display = 'none'; }
     saveState();
   }
 
@@ -545,7 +559,6 @@
     embeddedActive = true;
     closedByUser = false; nativeHiddenRef = null;
     if (wallOpen) { try { window.close(); } catch (e) {} wallOpen = false; }
-    applyReturnVisibility();
     setChat(ch);
   }
 
@@ -557,7 +570,6 @@
     embeddedActive = false;
     hidden = true;
     if (refs.panel) refs.panel.style.display = 'none';
-    applyReturnVisibility();
     saveState();
   }
 
@@ -568,30 +580,6 @@
     refs.link.classList.toggle('bad', !alive);
     refs.link.textContent = alive ? ('LINK · ' + (current || '—')) : 'NO LINK';
     refs.link.title = alive ? 'Связь со стрим-окном есть' : 'Нет связи: откройте ' + HOST + ' в ТОМ ЖЕ браузере и профиле';
-  }
-
-  function buildLifeline() {
-    const css = `
-      #rgglifeline{position:fixed;right:14px;bottom:14px;z-index:2147483001;display:none;align-items:center;justify-content:center;
-        width:30px;height:30px;border-radius:9px;cursor:pointer;
-        border:1px solid rgba(145,71,255,.22);background:rgba(24,24,27,.5);
-        -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);color:#adadb8;
-        opacity:.15;transform:scale(.9);
-        transition:opacity .28s ease,transform .3s cubic-bezier(.2,1.3,.3,1),box-shadow .28s ease,border-color .28s ease,color .28s ease,background .28s ease}
-      #rgglifeline:hover{opacity:1;transform:scale(1.1);color:#fff;border-color:#a970ff;
-        background:rgba(145,71,255,.24);box-shadow:0 0 20px -2px rgba(145,71,255,.75),0 0 0 1px rgba(169,112,255,.3) inset}
-      #rgglifeline:active{transform:scale(.96)}
-      #rgglifeline svg{display:block;transition:filter .28s ease,transform .28s ease}
-      #rgglifeline:hover svg{filter:drop-shadow(0 0 6px rgba(169,112,255,.85));transform:translateY(-1px)}
-    `;
-    const st = document.createElement('style'); st.setAttribute('data-rgg', '1'); st.textContent = css; document.head.appendChild(st);
-    const el = document.createElement('button');
-    el.id = 'rgglifeline';
-    el.title = 'Открыть чат отдельным окном (Alt+C)';
-    el.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
-    document.body.appendChild(el);
-    refs.lifeline = el;
-    el.onclick = () => openWallWindow();
   }
 
   function buildPanel() {
@@ -648,15 +636,8 @@
       #rggchat.rgg-embedded .rgg-top{cursor:default}
       #rggchat:not(.rgg-embedded) .rgg-wall-open{display:none}
 
-      /* В обычном режиме (dock) скрываем чипы, если это не стена (логика из v26) */
-      /* Но в v27 мы хотим, чтобы в dock чипы были видны?
-         В v26 было: #rggchat:not(.rgg-wall) .rgg-chips{display:none} -> это скрывало чипы в dock.
-         Если ты хочешь видеть чипы в dock, убери эту строку.
-         Если хочешь как в v26 (без чипов в dock), оставь.
-         Судя по запросу "вкладки со стримерами не нужны... в режиме стены",
-         я оставлю чипы в dock, но скрою в стене.
-      */
-
+      /* В обычном режиме (dock) тоже скрываем чипы через CSS для надежности */
+      #rggchat:not(.rgg-wall) .rgg-chips{display:none}
       #rggchat:not(.rgg-wall) .rgg-tools{margin-left:auto}
 
       .rgg-game{display:flex;align-items:center;gap:6px;min-width:0;flex:0 1 auto;
@@ -762,7 +743,7 @@
         <span class="rgg-logo"><svg viewBox="0 0 24 24" width="17" height="17" fill="#a970ff"><path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714z"/></svg></span>
         <span class="rgg-name">…</span>
         <span class="rgg-live"><i></i>LIVE</span>
-        <span class="rgg-ver">v27.6${MODE === 'wall' ? '·wall' : ''}</span>
+        <span class="rgg-ver">v27.8${MODE === 'wall' ? '·wall' : ''}</span>
         <span class="rgg-link bad">NO LINK</span>
         <span class="rgg-spacer"></span>
         <button class="rgg-btn rgg-auto is-on" title="${MODE === 'wall' ? 'Синхронизация со стрим-окном' : 'Авто-переключение'}">AUTO</button>
@@ -822,7 +803,13 @@
       refs.invBtn.classList.toggle('is-on', invertOn);
       saveState();
     };
-    refs.frame.addEventListener('load', () => refs.loader.classList.add('hide'));
+
+    // --- ФИКС: Снимаем блокировку при загрузке iframe ---
+    refs.frame.addEventListener('load', () => {
+      refs.loader.classList.add('hide');
+      switchingLock = false; // Разблокируем логику тиков
+    });
+    // ---------------------------------------------------
 
     function busy(on) { panel.classList.toggle('rgg-busy', on); }
 
@@ -892,7 +879,6 @@
     if (MODE === 'dock') {
       hidden = true;
       if (refs.panel) refs.panel.style.display = 'none';
-      applyReturnVisibility();
     }
     if (MODE === 'wall') {
       refs.panel.style.display = 'flex';
@@ -917,6 +903,11 @@
 
   function setChat(ch) {
     if (!ch || current === ch) return;
+
+    // --- ФИКС: Ставим блокировку перед сменой источника ---
+    switchingLock = true;
+    // ----------------------------------------------------
+
     current = ch;
     if (refs.loader) refs.loader.classList.remove('hide');
     clearTimeout(refs._lt); refs._lt = regTimeout(() => refs.loader && refs.loader.classList.add('hide'), 7000);
@@ -933,6 +924,14 @@
 
   function refreshChips() {
     if (!refs.chips) return;
+
+    // ЖЕСТКИЙ ФИКС v27.7+: Блокируем создание чипсов в режиме dock
+    if (MODE !== 'wall') {
+      if (refs.chips.innerHTML !== '') refs.chips.innerHTML = '';
+      return;
+    }
+    // -----------------------------------------------------------
+
     const set = new Set();
     players().forEach(p => set.add(p.ch));
     if (MODE === 'wall') wallChips.forEach(c => set.add(c));
@@ -966,6 +965,10 @@
   }
 
   function tickBody() {
+    // --- ФИКС: Если идем переключение, ничего не трогаем ---
+    if (switchingLock) return;
+    // --------------------------------------------------------
+
     if (MODE === 'wall') { refreshChips(); return; }
 
     if (IS_TWITCH) {
@@ -1021,11 +1024,10 @@
       ensureWallHideStyle();
       refs = {};
       embeddedActive = false;
-      if (MODE === 'dock') buildLifeline();
       buildPanel();
       renderAuto();
       booted = true; attempts = 0;
-      console.log('[RGG-chat] v27.6 dom built · mode=' + MODE + ' · host=' + HOST);
+      console.log('[RGG-chat] v27.8 dom built · mode=' + MODE + ' · host=' + HOST);
     } catch (e) {
       console.error('[RGG-chat] buildDom error', e);
     }
@@ -1035,13 +1037,10 @@
     if (!document.body) return;
     const p = document.getElementById('rggchat');
     const pOk = !!(p && document.body.contains(p));
-    if (MODE === 'dock') {
-      const l = document.getElementById('rgglifeline');
-      const lOk = !!(l && document.body.contains(l));
-      if (pOk && lOk) { attempts = 0; return; }
-    } else if (pOk) { attempts = 0; return; }
+    if (pOk) { attempts = 0; return; }
+
     if (attempts++ > 30) { if (attempts === 31) console.error('[RGG-chat] too many rebuilds — backing off'); return; }
-    console.warn('[RGG-chat] watchdog: panel/lifeline missing in DOM — rebuilding');
+    console.warn('[RGG-chat] watchdog: panel missing in DOM — rebuilding');
     buildDom();
   }
 
@@ -1055,22 +1054,21 @@
     if (e.key === WALL_HB_KEY) syncWallActiveClass();
   }
 
-  if (!IS_TWITCH) {
-    document.addEventListener('pointerdown', (e) => {
-      const leaf = findLeafButton();
-      if (leaf && (e.target === leaf || leaf.contains(e.target))) {
-        if (closedByUser) {
-          if (nativeHiddenRef && nativeHiddenRef.isConnected) nativeHiddenRef.style.display = '';
-          closedByUser = false;
-        } else if (embeddedActive) {
-          e.preventDefault(); e.stopImmediatePropagation();
-          hideFirstMonitorChat();
-        }
-        return;
+  document.addEventListener('pointerdown', (e) => {
+    const leaf = findLeafButton();
+    if (leaf && (e.target === leaf || leaf.contains(e.target))) {
+      if (closedByUser) {
+        if (nativeHiddenRef && nativeHiddenRef.isConnected) nativeHiddenRef.style.display = '';
+        closedByUser = false;
+      } else if (embeddedActive) {
+        e.preventDefault(); e.stopImmediatePropagation();
+        hideFirstMonitorChat();
       }
-      if (closedByUser && nativeHiddenRef && nativeHiddenRef.isConnected && nativeHiddenRef.style.display === 'none') nativeHiddenRef.style.display = '';
-    }, true);
-  }
+      return;
+    }
+    if (closedByUser && nativeHiddenRef && nativeHiddenRef.isConnected && nativeHiddenRef.style.display === 'none') nativeHiddenRef.style.display = '';
+  }, true);
+
   document.addEventListener('keydown', keyHandler);
 
   window[INSTANCE_KEY] = { cleanup: cleanupInstance };
@@ -1085,5 +1083,5 @@
   else if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', buildDom, { once: true });
   else buildDom();
 
-  console.log('[RGG-chat] v27.6 started · mode=' + MODE + ' · host=' + HOST);
+  console.log('[RGG-chat] v27.8 started · mode=' + MODE + ' · host=' + HOST);
 })();
